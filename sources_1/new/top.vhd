@@ -21,9 +21,9 @@ entity top is
     ddr2_odt      : out std_logic_vector(0 downto 0);
     sys_clk_i     : in std_logic;
     sys_rst       : in std_logic;
-    led           : out std_logic_vector(15 downto 0);
-    sw_write      : in std_logic; -- Write operation switch (e.g. SW[0])
-    sw_read       : in std_logic  -- Read operation switch (e.g. SW[1])
+    uart_rx  : in  std_logic;
+    uart_tx  : out std_logic;
+    led : out std_logic_vector(3 downto 0)
   );
 end entity top;
 
@@ -63,6 +63,8 @@ architecture Behavioral of top is
   signal sys_rst_temp: std_logic := '0';
   type state_type is (IDLE, WAIT_WRITE, WRITE_CMD, WRITE_DONE, WAIT_READ, READ_CMD, READ_WAIT, LED_ON);
   signal state : state_type := IDLE;
+  signal uart_leds : std_logic_vector(3 downto 0);
+
 
 begin
 
@@ -117,103 +119,34 @@ u_mig: entity work.mig_7series_0
     sys_rst            => sys_rst_temp
   );
 
-  -- Main FSM process
-  process(ui_clk)
-  begin
-    if rising_edge(ui_clk) then
-      sw_write_reg <= sw_write;
-      sw_read_reg  <= sw_read;
-    end if;
-  end process;
 
-  -- Main FSM
-  process(ui_clk)
-  begin
-    if rising_edge(ui_clk) then
-      if ui_clk_sync_rst = '1' or init_calib_complete = '0' then
-        state <= IDLE;
-        app_en <= '0';
-        app_cmd <= "000";
-        app_addr <= (others => '0');
-        app_wdf_data <= x"123456789abcdef0";
-        app_wdf_end <= '1';
-        app_wdf_mask <= (others => '0');
-        app_wdf_wren <= '0';
-        read_data_latched <= (others => '0');
-      else
-        case state is
-          when IDLE =>
-            if sw_write_reg = '1' then
-              state <= WRITE_CMD;
-            elsif sw_read_reg = '1' then
-              state <= READ_CMD;
-            end if;
+u_uart_cmd: entity work.uart_cmd
+  generic map (
+    CLK_FREQ  => 100_000_000,
+    BAUD_RATE => 115200
+  )
+  port map (
+    clk          => clk_cpu,
+    rst          => sys_rst,
+    uart_rx      => uart_rx,
+    uart_tx      => uart_tx,
+    -- MIG
+    app_addr         => app_addr,
+    app_cmd          => app_cmd,
+    app_en           => app_en,
+    app_wdf_data     => app_wdf_data,
+    app_wdf_end      => app_wdf_end,
+    app_wdf_mask     => app_wdf_mask,
+    app_wdf_wren     => app_wdf_wren,
+    app_rd_data      => app_rd_data,
+    app_rd_data_valid=> app_rd_data_valid,
+    app_rdy          => app_rdy,
+    app_wdf_rdy      => app_wdf_rdy,
+    -- Debug
+    led              => led(3 downto 0)
+  );
 
-          when WRITE_CMD =>
-            if app_rdy = '1' and app_wdf_rdy = '1' then
-              app_en <= '1';
-              app_cmd <= "000"; -- WRITE
-              app_addr <= (others => '0');
-              app_wdf_data <= x"123456789abcdef0";
-              app_wdf_end <= '1';
-              app_wdf_mask <= (others => '0');
-              app_wdf_wren <= '1';
-              state <= WRITE_DONE;
-            end if;
 
-          when WRITE_DONE =>
-            app_en <= '0';
-            app_wdf_wren <= '0';
-            if sw_write_reg = '0' then  -- wait for release
-              state <= IDLE;
-            end if;
 
-          when READ_CMD =>
-            if app_rdy = '1' then
-              app_en <= '1';
-              app_cmd <= "001"; -- READ
-              app_addr <= (others => '0');
-              app_wdf_end <= '0';
-              app_wdf_mask <= (others => '0');
-              app_wdf_wren <= '0';
-              state <= READ_WAIT;
-            end if;
-
-          when READ_WAIT =>
-            app_en <= '0';
-            if app_rd_data_valid = '1' then
-              read_data_latched <= app_rd_data(11 downto 0); -- Latch lower 12 bits
-              state <= LED_ON;
-            end if;
-
-          when LED_ON =>
-            if sw_read_reg = '0' then -- wait for release
-              state <= IDLE;
-            end if;
-
-          when others =>
-            state <= IDLE;
-        end case;
-      end if;
-    end if;
-  end process;
-
-  -- LED assignment
-  led(0) <= init_calib_complete;           -- MIG calibration done
-  led(1) <= '1' when (state = IDLE) else '0';
-  led(2) <= '1' when (state = WRITE_CMD or state = WRITE_DONE) else '0';
-  led(3) <= '1' when (state = READ_CMD or state = READ_WAIT) else '0';
-  led(4) <= read_data_latched(0);
-  led(5) <= read_data_latched(1);
-  led(6) <= read_data_latched(2);
-  led(7) <= read_data_latched(3);
-  led(8) <= read_data_latched(4);
-  led(9) <= read_data_latched(5);
-  led(10) <= read_data_latched(6);
-  led(11) <= read_data_latched(7);
-  led(12) <= read_data_latched(8);
-  led(13) <= read_data_latched(9);
-  led(14) <= read_data_latched(10);
-  led(15) <= read_data_latched(11);
  sys_rst_temp <= not(sys_rst);
 end architecture Behavioral;
